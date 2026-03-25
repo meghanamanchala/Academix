@@ -1,0 +1,41 @@
+name: CI - Backend Quality Gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: video-processing-platform/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: video-processing-platform/backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install ffmpeg (metadata extraction)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Lint Python code
+        run: |
+          python -m pip install flake8
+          flake8 . --select=F
+
+      - name: Run tests
+        run: python -m pytest tests -v

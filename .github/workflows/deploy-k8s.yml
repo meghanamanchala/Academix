@@ -1,0 +1,532 @@
+name: CD - Build, Deploy, Verify Kubernetes Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment values file
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - prod
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  K8S_NAMESPACE: default
+  HELM_RELEASE: video-platform
+
+jobs:
+  prepare-image-tags:
+    name: CD - Prepare Image Tags
+    runs-on: ubuntu-latest
+    outputs:
+      chart_version: ${{ steps.tags.outputs.chart_version }}
+      short_sha: ${{ steps.tags.outputs.short_sha }}
+      version_tag: ${{ steps.tags.outputs.version_tag }}
+      image_tag: ${{ steps.tags.outputs.image_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute hybrid image tags
+        id: tags
+        run: |
+          CHART_VERSION=$(grep '^version:' video-processing-platform/charts/video-processing-platform/Chart.yaml | awk '{print $2}')
+          SHORT_SHA="${GITHUB_SHA::7}"
+          VERSION_TAG="${CHART_VERSION}-build.${GITHUB_RUN_NUMBER}"
+          IMAGE_TAG="${VERSION_TAG}-sha.${SHORT_SHA}"
+
+          echo "chart_version=$CHART_VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "version_tag=$VERSION_TAG" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+  ci-backend-quality:
+    name: CI - Backend Quality Gate
+    needs: prepare-image-tags
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: video-processing-platform/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: video-processing-platform/backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install ffmpeg (metadata extraction)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Run tests
+        run: python -m pytest tests -v
+
+  ci-frontend-quality:
+    name: CI - Frontend Quality Gate
+    needs: prepare-image-tags
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: video-processing-platform/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Set Clerk publishable key fallback
+        run: |
+          if [ -z "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}" ]; then
+            echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_local" >> "$GITHUB_ENV"
+          else
+            echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Build
+        env:
+          NODE_ENV: production
+        run: npm run build
+
+  cd-build-backend-image:
+    name: CD - Build & Push Backend Image
+    needs:
+      - prepare-image-tags
+      - ci-backend-quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Validate Docker credentials
+        run: |
+          if [ -z "${{ secrets.DOCKER_HUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
+            echo "DOCKER_HUB_USERNAME and DOCKER_HUB_TOKEN secrets are required."
+            exit 1
+          fi
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./video-processing-platform/backend
+          push: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare-image-tags.outputs.image_tag }}
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/video-backend:${{ needs.prepare-image-tags.outputs.image_tag }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/video-backend:${{ needs.prepare-image-tags.outputs.short_sha }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/video-backend:latest
+
+      - name: Export backend image
+        id: image
+        run: echo "image=${{ secrets.DOCKER_HUB_USERNAME }}/video-backend:${{ needs.prepare-image-tags.outputs.image_tag }}" >> "$GITHUB_OUTPUT"
+
+  cd-build-frontend-image:
+    name: CD - Build & Push Frontend Image
+    needs:
+      - prepare-image-tags
+      - ci-frontend-quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Validate Docker credentials
+        run: |
+          if [ -z "${{ secrets.DOCKER_HUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
+            echo "DOCKER_HUB_USERNAME and DOCKER_HUB_TOKEN secrets are required."
+            exit 1
+          fi
+
+      - name: Set Clerk publishable key fallback
+        run: |
+          if [ -z "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}" ]; then
+            echo "CLERK_BUILD_KEY=pk_test_local" >> "$GITHUB_ENV"
+          else
+            echo "CLERK_BUILD_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./video-processing-platform/frontend
+          push: true
+          build-args: |
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ env.CLERK_BUILD_KEY }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare-image-tags.outputs.image_tag }}
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/video-frontend:${{ needs.prepare-image-tags.outputs.image_tag }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/video-frontend:${{ needs.prepare-image-tags.outputs.short_sha }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/video-frontend:latest
+
+      - name: Export frontend image
+        id: image
+        run: echo "image=${{ secrets.DOCKER_HUB_USERNAME }}/video-frontend:${{ needs.prepare-image-tags.outputs.image_tag }}" >> "$GITHUB_OUTPUT"
+
+  check-deploy-runner:
+    name: CD - Runner Availability Check
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-image-tags
+      - cd-build-backend-image
+      - cd-build-frontend-image
+      - detect-deploy-runner-mode
+    outputs:
+      deploy_runner_ready: ${{ steps.probe.outputs.deploy_runner_ready }}
+      deploy_runs_on: ${{ steps.probe.outputs.deploy_runs_on }}
+    steps:
+      - name: Probe selected runner type
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          USE_SELF_HOSTED: ${{ vars.USE_SELF_HOSTED }}
+          FORCE_SELF_HOSTED: ${{ needs.detect-deploy-runner-mode.outputs.force_self_hosted }}
+        run: |
+          if [ "$USE_SELF_HOSTED" != "true" ] && [ "$FORCE_SELF_HOSTED" != "true" ]; then
+            echo "deploy_runs_on=ubuntu-latest" >> "$GITHUB_OUTPUT"
+            echo "deploy_runner_ready=true" >> "$GITHUB_OUTPUT"
+            echo "Using GitHub-hosted runner for deploy."
+            exit 0
+          fi
+
+          echo "deploy_runs_on=self-hosted" >> "$GITHUB_OUTPUT"
+
+          STATUS_CODE=$(curl -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -o runners.json \
+            -w "%{http_code}" \
+            "https://api.github.com/repos/$REPO/actions/runners")
+
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "Warning: Could not query runner API (HTTP $STATUS_CODE)."
+            echo "Proceeding with self-hosted deploy and letting scheduler validate runner availability."
+            echo "deploy_runner_ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ONLINE_SELF_HOSTED=$(jq '[.runners[] | select(.status == "online") ] | length' runners.json)
+
+          if [ "$ONLINE_SELF_HOSTED" -gt 0 ]; then
+            echo "deploy_runner_ready=true" >> "$GITHUB_OUTPUT"
+            echo "Found $ONLINE_SELF_HOSTED online self-hosted runner(s)."
+          else
+            echo "deploy_runner_ready=false" >> "$GITHUB_OUTPUT"
+            echo "No online self-hosted runners found."
+          fi
+
+  detect-deploy-runner-mode:
+    name: CD - Detect Runner Mode
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-image-tags
+      - cd-build-backend-image
+      - cd-build-frontend-image
+    outputs:
+      force_self_hosted: ${{ steps.detect.outputs.force_self_hosted }}
+      kube_server: ${{ steps.detect.outputs.kube_server }}
+    steps:
+      - name: Detect kube API endpoint type
+        id: detect
+        env:
+          KCFG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          if [ -z "$KCFG" ]; then
+            echo "force_self_hosted=false" >> "$GITHUB_OUTPUT"
+            echo "kube_server=unknown" >> "$GITHUB_OUTPUT"
+            echo "KUBE_CONFIG is not set; runner mode not forced."
+            exit 0
+          fi
+
+          TMP_CFG="$(mktemp)"
+          if echo "$KCFG" | base64 -d > "$TMP_CFG" 2>/dev/null; then
+            :
+          else
+            printf '%s' "$KCFG" > "$TMP_CFG"
+          fi
+
+          SERVER="$(awk '/server:/{print $2; exit}' "$TMP_CFG")"
+          if [ -z "$SERVER" ]; then
+            SERVER="unknown"
+          fi
+
+          echo "kube_server=$SERVER" >> "$GITHUB_OUTPUT"
+          echo "Detected kube server endpoint: $SERVER"
+
+          if echo "$SERVER" | grep -Eq 'kubernetes\.docker\.internal|localhost|127\.0\.0\.1'; then
+            echo "force_self_hosted=true" >> "$GITHUB_OUTPUT"
+            echo "Local-only endpoint detected; deployment will target self-hosted runner."
+          else
+            echo "force_self_hosted=false" >> "$GITHUB_OUTPUT"
+            echo "Remote endpoint detected; hosted runner can be used."
+          fi
+
+  cd-deploy-runner-missing:
+    name: CD - Missing Self-Hosted Runner
+    runs-on: ubuntu-latest
+    needs: check-deploy-runner
+    if: ${{ needs.check-deploy-runner.outputs.deploy_runs_on == 'self-hosted' && needs.check-deploy-runner.outputs.deploy_runner_ready != 'true' }}
+    steps:
+      - name: Fail fast with remediation
+        run: |
+          echo "::error title=No self-hosted runner available::Deployment is configured with USE_SELF_HOSTED=true, but no online self-hosted runner is available for this repository. Start your self-hosted runner service, or set USE_SELF_HOSTED=false to use ubuntu-latest."
+          exit 1
+
+  cd-deploy:
+    name: CD - Deploy to Kubernetes
+    needs:
+      - prepare-image-tags
+      - cd-build-backend-image
+      - cd-build-frontend-image
+      - detect-deploy-runner-mode
+      - check-deploy-runner
+    if: ${{ needs.check-deploy-runner.outputs.deploy_runner_ready == 'true' }}
+    runs-on: ${{ needs.check-deploy-runner.outputs.deploy_runs_on }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Resolve deployment environment
+        run: |
+          DEPLOY_ENV="${{ github.event.inputs.environment }}"
+          if [ -z "$DEPLOY_ENV" ]; then
+            DEPLOY_ENV="dev"
+          fi
+          echo "DEPLOY_ENV=$DEPLOY_ENV" >> "$GITHUB_ENV"
+          echo "VALUES_FILE=video-processing-platform/charts/video-processing-platform/values-$DEPLOY_ENV.yaml" >> "$GITHUB_ENV"
+
+      - name: Configure kubeconfig
+        run: |
+          if [ -z "${{ secrets.KUBE_CONFIG }}" ]; then
+            echo "KUBE_CONFIG secret is required."
+            exit 1
+          fi
+
+          mkdir -p "$HOME/.kube"
+          if echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config" 2>/dev/null; then
+            echo "Decoded base64 kubeconfig secret"
+          else
+            echo "${{ secrets.KUBE_CONFIG }}" > "$HOME/.kube/config"
+            echo "Using raw kubeconfig secret"
+          fi
+
+      - name: Validate deployment inputs
+        run: |
+          if [ -z "${{ secrets.DOCKER_HUB_USERNAME }}" ]; then
+            echo "DOCKER_HUB_USERNAME secret is required."
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.CLERK_SECRET_KEY }}" ] || [ -z "${{ secrets.MONGO_USERNAME }}" ] || [ -z "${{ secrets.MONGO_PASSWORD }}" ]; then
+            echo "CLERK_SECRET_KEY, MONGO_USERNAME, and MONGO_PASSWORD secrets are required."
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}" ]; then
+            echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY secret is required."
+            exit 1
+          fi
+
+          if [ ! -f "$VALUES_FILE" ]; then
+            echo "Values file not found: $VALUES_FILE"
+            exit 1
+          fi
+
+      - name: Create or update runtime Kubernetes secrets
+        env:
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          MONGO_USERNAME: ${{ secrets.MONGO_USERNAME }}
+          MONGO_PASSWORD: ${{ secrets.MONGO_PASSWORD }}
+        run: |
+          kubectl create secret generic clerk-secrets \
+            --namespace "$K8S_NAMESPACE" \
+            --from-literal=publishable-key="$CLERK_PUBLISHABLE_KEY" \
+            --from-literal=secret-key="$CLERK_SECRET_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl create secret generic mongo-secrets \
+            --namespace "$K8S_NAMESPACE" \
+            --from-literal=username="$MONGO_USERNAME" \
+            --from-literal=password="$MONGO_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Helm upgrade/install
+        run: |
+          helm upgrade --install "$HELM_RELEASE" video-processing-platform/charts/video-processing-platform \
+            --namespace "$K8S_NAMESPACE" \
+            --create-namespace \
+            -f video-processing-platform/charts/video-processing-platform/values.yaml \
+            -f "$VALUES_FILE" \
+            --set backend.image.repository=${{ secrets.DOCKER_HUB_USERNAME }}/video-backend \
+            --set backend.image.tag=${{ needs.prepare-image-tags.outputs.image_tag }} \
+            --set frontend.image.repository=${{ secrets.DOCKER_HUB_USERNAME }}/video-frontend \
+            --set frontend.image.tag=${{ needs.prepare-image-tags.outputs.image_tag }}
+
+      - name: Publish image traceability summary
+        run: |
+          {
+            echo "## Image Tag Traceability"
+            echo "- Commit: ${{ github.sha }}"
+            echo "- Short SHA tag: ${{ needs.prepare-image-tags.outputs.short_sha }}"
+            echo "- Base version: ${{ needs.prepare-image-tags.outputs.chart_version }}"
+            echo "- Versioned tag: ${{ needs.prepare-image-tags.outputs.image_tag }}"
+            echo "- Backend image: ${{ secrets.DOCKER_HUB_USERNAME }}/video-backend:${{ needs.prepare-image-tags.outputs.image_tag }}"
+            echo "- Frontend image: ${{ secrets.DOCKER_HUB_USERNAME }}/video-frontend:${{ needs.prepare-image-tags.outputs.image_tag }}"
+            echo ""
+            echo "Tag format: <chart-version>-build.<run-number>-sha.<short-sha>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  cd-verify:
+    name: CD - Post-Deploy Verification
+    needs: cd-deploy
+    runs-on: ${{ vars.USE_SELF_HOSTED == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        run: |
+          if [ -z "${{ secrets.KUBE_CONFIG }}" ]; then
+            echo "KUBE_CONFIG secret is required."
+            exit 1
+          fi
+
+          mkdir -p "$HOME/.kube"
+          if echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config" 2>/dev/null; then
+            echo "Decoded base64 kubeconfig secret"
+          else
+            echo "${{ secrets.KUBE_CONFIG }}" > "$HOME/.kube/config"
+            echo "Using raw kubeconfig secret"
+          fi
+
+      - name: Guard against local-only kubeconfig on hosted runners
+        run: |
+          SERVER="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+          echo "Detected kube API server endpoint: $SERVER"
+
+          if echo "$SERVER" | grep -Eq 'kubernetes\.docker\.internal|localhost|127\.0\.0\.1'; then
+            echo "::error title=Local-only kubeconfig endpoint detected::KUBE_CONFIG points to '$SERVER', which is not reachable from GitHub-hosted runners. Use a self-hosted runner with Docker Desktop network access, or provide a remotely reachable Kubernetes API endpoint in KUBE_CONFIG."
+            exit 1
+          fi
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/${HELM_RELEASE}-video-processing-platform-backend -n "$K8S_NAMESPACE" --timeout=240s
+          kubectl rollout status deployment/${HELM_RELEASE}-video-processing-platform-frontend -n "$K8S_NAMESPACE" --timeout=240s
+
+      - name: Run live API smoke tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $namespace = "${{ env.K8S_NAMESPACE }}"
+          $service = "${{ env.HELM_RELEASE }}-video-processing-platform-backend-service"
+          $portForwardLog = Join-Path $env:RUNNER_TEMP "backend-port-forward.log"
+
+          # Port-forward from runner to the deployed backend service for deterministic smoke checks.
+          $portForward = Start-Process kubectl -ArgumentList @(
+            "-n", $namespace,
+            "port-forward", "svc/$service",
+            "18000:8000"
+          ) -RedirectStandardOutput $portForwardLog -RedirectStandardError $portForwardLog -PassThru
+
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                $probe = Invoke-WebRequest -Uri "http://127.0.0.1:18000/health" -UseBasicParsing -TimeoutSec 2
+                if ($probe.StatusCode -eq 200) {
+                  $ready = $true
+                  break
+                }
+              }
+              catch {
+                # Keep retrying until the port-forward tunnel is ready.
+              }
+            }
+
+            if (-not $ready) {
+              Write-Host "Port-forward log output:"
+              if (Test-Path $portForwardLog) {
+                Get-Content $portForwardLog
+              }
+              throw "Timed out waiting for backend port-forward readiness."
+            }
+
+            ./video-processing-platform/scripts/smoke-test-live.ps1 -BaseUrl "http://127.0.0.1:18000" -ApiHost "localhost"
+          }
+          finally {
+            if ($portForward -and -not $portForward.HasExited) {
+              Stop-Process -Id $portForward.Id -Force
+            }
+          }

@@ -1,0 +1,94 @@
+# Default values for video-processing-platform.
+
+# Backend configuration
+backend:
+  replicaCount: 3
+  image:
+    repository: ghcr.io/kalviumcommunity/video-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  persistence:
+    size: 5Gi
+  featureFlags:
+    ENABLE_AI_SUMMARY: "true"
+    ENABLE_LIVE_SUMMARY: "true"
+  env:
+    MONGO_DB_NAME: video_platform
+    UPLOAD_DIR: /app/uploads
+    MAX_UPLOAD_BYTES: "1073741824"
+
+# Frontend configuration
+frontend:
+  replicaCount: 3
+  image:
+    repository: ghcr.io/kalviumcommunity/video-frontend
+    tag: latest
+    pullPolicy: Always
+  publicApiUrl: http://api.academix.local
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  featureFlags:
+    NEXT_PUBLIC_ENABLE_ADVANCED_INSIGHTS: "true"
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "1024m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+  hosts:
+    - host: app.academix.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+          port: 80
+    - host: api.academix.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: backend
+          port: 8000
+
+# MongoDB configuration
+mongodb:
+  replicaCount: 1
+  image:
+    repository: mongo
+    tag: 7-jammy
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# Optional image pull secrets for private registries (for example private GHCR packages)
+# Example:
+# imagePullSecrets:
+#   - ghcr-pull-secret
+imagePullSecrets: []
