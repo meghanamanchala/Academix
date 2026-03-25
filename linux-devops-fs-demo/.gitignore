@@ -1,6 +1,0 @@
-logs/*
-!logs/.gitkeep
-*.log
-*.swp
-*.tmp
-.DS_Store
