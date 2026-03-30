@@ -1,5 +1,5 @@
 """Generate thumbnails for uploaded lectures using PyAV."""
-import sys
+    # sys import removed (was unused)
 from pathlib import Path
 
 UPLOADS = Path(__file__).parent.parent / "uploads"

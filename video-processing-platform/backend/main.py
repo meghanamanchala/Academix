@@ -1068,7 +1068,7 @@ def _generate_thumbnail_pyav(file_path: Path, thumbnail_path: Path) -> bool:
 
 def generate_thumbnail(file_path: Path, thumbnail_path: Path) -> bool:
     thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
-    output = _run_subprocess(
+    _run_subprocess(
         [
             "ffmpeg",
             "-y",

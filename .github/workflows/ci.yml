@@ -451,15 +451,12 @@ jobs:
     env:
       HELM_RELEASE: video-platform
       K8S_NAMESPACE: default
-    defaults:
-      run:
-          shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+    # Removed invalid shell default
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up kubectl
-          shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
         run: |
           $ver = "v1.32.0"
           $bin = "$env:USERPROFILE\tools\kubectl"
@@ -467,9 +464,9 @@ jobs:
           Invoke-WebRequest -Uri "https://dl.k8s.io/release/$ver/bin/windows/amd64/kubectl.exe" -OutFile "$bin\kubectl.exe" -UseBasicParsing
           Add-Content -Path $env:GITHUB_PATH -Value $bin
           Write-Host "kubectl $ver installed to $bin"
+        shell: pwsh
 
       - name: Set up Helm
-          shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
         run: |
           $ver = "v3.17.0"
           $tmp = "$env:TEMP\helm-install"
@@ -481,6 +478,7 @@ jobs:
           Copy-Item "$tmp\windows-amd64\helm.exe" "$bin\helm.exe" -Force
           Add-Content -Path $env:GITHUB_PATH -Value $bin
           Write-Host "Helm $ver installed to $bin"
+        shell: pwsh
 
       - name: Resolve deployment environment
         run: |
