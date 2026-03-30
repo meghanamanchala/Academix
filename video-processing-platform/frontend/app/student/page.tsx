@@ -3,6 +3,7 @@ import Navbar from "../../components/Navbar";
 import { fetchLectures } from "./lectures";
 import { currentUser } from "@clerk/nextjs/server";
 import SearchLecturesInput from "./SearchLecturesInput";
+import SubjectSelect from "./SubjectSelect";
 import LectureCard from "./LectureCard";
 import { normalizeSubject, SUBJECT_OPTIONS } from "../../lib/subjects";
 import Link from "next/link";
@@ -15,212 +16,220 @@ const SORT_OPTIONS = ["relevance", "recent", "a-z", "duration"] as const;
 type SortOption = (typeof SORT_OPTIONS)[number];
 
 function normalizeSort(sort: string | undefined, hasQuery: boolean): SortOption {
-  if (!sort) {
-    return hasQuery ? "relevance" : "recent";
-  }
+  if (!sort) return hasQuery ? "relevance" : "recent";
 
   const normalized = sort.toLowerCase();
   if (!SORT_OPTIONS.includes(normalized as SortOption)) {
     return hasQuery ? "relevance" : "recent";
   }
 
-  if (normalized === "relevance" && !hasQuery) {
-    return "recent";
-  }
+  if (normalized === "relevance" && !hasQuery) return "recent";
 
   return normalized as SortOption;
 }
 
-export default async function StudentLibraryPage({ searchParams }: StudentLibraryPageProps) {
+export default async function StudentLibraryPage({
+  searchParams,
+}: StudentLibraryPageProps) {
   const { q, subject, sort } = await searchParams;
+
   const query = (q ?? "").trim();
   const selectedSubject = normalizeSubject(subject);
   const selectedSort = normalizeSort(sort, Boolean(query));
+
   let lectures = [] as Awaited<ReturnType<typeof fetchLectures>>;
   let loadError: string | null = null;
 
-  // get optional current user to show progress
   const user = await currentUser();
 
   try {
     lectures = await fetchLectures(query, { subject: selectedSubject });
   } catch {
-    loadError = "Lecture service is currently unavailable. Please try again shortly.";
+    loadError =
+      "Lecture service is currently unavailable. Please try again shortly.";
   }
-
-  const getSubjectHref = (targetSubject: string) => {
-    const params = new URLSearchParams();
-    if (query) {
-      params.set("q", query);
-    }
-    if (selectedSort !== "recent" && !(selectedSort === "relevance" && query)) {
-      params.set("sort", selectedSort);
-    }
-    if (targetSubject !== "All Subjects") {
-      params.set("subject", targetSubject);
-    }
-    const next = params.toString();
-    return next ? `/student?${next}` : "/student";
-  };
 
   const getSortHref = (targetSort: SortOption) => {
     const params = new URLSearchParams();
 
-    if (query) {
-      params.set("q", query);
-    }
+    if (query) params.set("q", query);
     if (selectedSubject !== "All Subjects") {
       params.set("subject", selectedSubject);
     }
-    if (targetSort !== "recent" && !(targetSort === "relevance" && query)) {
+
+    if (
+      targetSort !== "recent" &&
+      !(targetSort === "relevance" && query)
+    ) {
       params.set("sort", targetSort);
     }
 
-    const next = params.toString();
-    return next ? `/student?${next}` : "/student";
+    return params.toString() ? `/student?${params}` : "/student";
   };
 
   const sortedLectures =
     selectedSort === "relevance" && query
       ? lectures
-      : [...lectures].sort((left, right) => {
+      : [...lectures].sort((a, b) => {
           if (selectedSort === "a-z") {
-            return left.title.localeCompare(right.title);
+            return a.title.localeCompare(b.title);
           }
 
           if (selectedSort === "duration") {
-            return (right.durationSeconds ?? 0) - (left.durationSeconds ?? 0);
+            return (b.durationSeconds ?? 0) - (a.durationSeconds ?? 0);
           }
 
-          const leftTime = new Date(left.updatedAt ?? left.publishedDate).getTime();
-          const rightTime = new Date(right.updatedAt ?? right.publishedDate).getTime();
+          const aTime = new Date(
+            a.updatedAt ?? a.publishedDate
+          ).getTime();
+          const bTime = new Date(
+            b.updatedAt ?? b.publishedDate
+          ).getTime();
 
-          if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime)) {
-            return rightTime - leftTime;
+          if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) {
+            return bTime - aTime;
           }
 
-          return right.title.localeCompare(left.title);
+          return b.title.localeCompare(a.title);
         });
 
-  const hasActiveFilters = Boolean(query) || selectedSubject !== "All Subjects" || selectedSort !== "recent";
+  const hasActiveFilters =
+    Boolean(query) ||
+    selectedSubject !== "All Subjects" ||
+    selectedSort !== "recent";
 
   return (
-    <div className="flex min-h-screen flex-col bg-[radial-gradient(circle_at_top,_#e2e8f0_0%,_#f8fafc_35%,_#ffffff_100%)] text-slate-900">
+    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
       <Navbar active="library" />
 
       <main className="flex-1">
         <section className="mx-auto w-full max-w-6xl px-4 py-6 md:py-8">
-          <div className="rounded-3xl border border-slate-200/70 bg-white/90 p-5 shadow-lg shadow-slate-200/40 backdrop-blur md:p-7">
-            <div className="flex flex-wrap items-start justify-between gap-6">
-              <div className="max-w-2xl">
-                <span className="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
+          <div className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm md:p-6">
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div className="max-w-xl space-y-1.5">
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
                   Student Library
                 </span>
-                <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-900 md:text-4xl">My Learning Library</h1>
-                <p className="mt-2 text-base leading-relaxed text-slate-600 md:text-lg">
+
+                <h1 className="text-[2rem] font-extrabold leading-snug tracking-tight text-slate-900 md:text-[2.5rem]">
+                  My Learning Library
+                </h1>
+
+                <p className="text-[15px] font-medium text-slate-600 md:text-base md:font-normal">
                   Continue where you left off and explore new topics.
                 </p>
               </div>
 
-              <div className="w-full max-w-sm">
-                <SearchLecturesInput initialQuery={q ?? ""} />
-                <p className="mt-2 text-xs text-slate-500">
-                  Search across lecture titles, subjects, summaries, key concepts, and transcript text.
+              <div className="w-full md:max-w-lg">
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-slate-400">
+                  Search Lectures
                 </p>
+                <div className="flex-1">
+                  <SearchLecturesInput initialQuery={q ?? ""} />
+                </div>
               </div>
             </div>
 
-            <div className="mt-6 flex flex-wrap items-center gap-2.5">
-              {SUBJECT_OPTIONS.map((subjectOption) => {
-                const isActive = selectedSubject === subjectOption;
-                return (
-                  <Link
-                    key={subjectOption}
-                    href={getSubjectHref(subjectOption)}
-                    className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
-                      isActive
-                        ? "border-slate-900 bg-slate-900 text-white shadow-sm"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-100"
-                    }`}
-                  >
-                    {subjectOption}
-                  </Link>
-                );
-              })}
-
-              <span className="ml-auto rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
-                Showing: {selectedSubject}
-              </span>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-2.5">
-              {SORT_OPTIONS.map((sortOption) => {
-                if (sortOption === "relevance" && !query) {
-                  return null;
-                }
-                const isActive = selectedSort === sortOption;
-                const label =
-                  sortOption === "relevance"
-                    ? "Best Match"
-                    : sortOption === "recent"
-                    ? "Latest"
-                    : sortOption === "a-z"
-                      ? "A-Z"
-                      : "Longest";
-
-                return (
-                  <Link
-                    key={sortOption}
-                    href={getSortHref(sortOption)}
-                    className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold transition ${
-                      isActive
-                        ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-indigo-200 hover:bg-indigo-50"
-                    }`}
-                  >
-                    Sort: {label}
-                  </Link>
-                );
-              })}
-
-              <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                Results: {sortedLectures.length}
-              </span>
-
-              {query ? (
-                <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                  Search: &quot;{query}&quot;
+            <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-slate-200 pt-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-semibold text-slate-500 leading-tight">
+                  Subject
                 </span>
-              ) : null}
+                <div className="min-w-48">
+                  <SubjectSelect
+                    options={SUBJECT_OPTIONS}
+                    selectedSubject={selectedSubject}
+                  />
+                </div>
+              </div>
 
-              {hasActiveFilters ? (
-                <Link
-                  href="/student"
-                  className="rounded-full border border-rose-100 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                >
-                  Clear Filters
-                </Link>
-              ) : null}
+              <div className="ml-auto flex w-full flex-col gap-1 sm:w-auto md:items-end">
+                <div className="flex flex-wrap items-center gap-1.5 md:justify-end">
+                  <span className="text-xs font-semibold text-slate-500 leading-tight">
+                    Sort
+                  </span>
+
+                  {SORT_OPTIONS.map((sortOption) => {
+                    if (sortOption === "relevance" && !query) return null;
+
+                    const isActive = selectedSort === sortOption;
+
+                    const label =
+                      sortOption === "relevance"
+                        ? "Best"
+                        : sortOption === "recent"
+                        ? "Latest"
+                        : sortOption === "a-z"
+                        ? "A–Z"
+                        : "Longest";
+
+                    return (
+                      <Link
+                        key={sortOption}
+                        href={getSortHref(sortOption)}
+                        className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                          isActive
+                            ? "bg-indigo-600 text-white"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        {label}
+                      </Link>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-1.5 md:justify-end mt-1">
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                    {sortedLectures.length} results
+                  </span>
+
+                  {hasActiveFilters && (
+                    <Link
+                      href="/student"
+                      className="rounded-full border border-rose-200 px-2 py-0.5 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
+                    >
+                      Clear
+                    </Link>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {loadError ? (
-              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {loadError && (
+              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-600">
                 {loadError}
               </div>
-            ) : null}
+            )}
           </div>
 
+          {/* LECTURES */}
           {sortedLectures.length > 0 ? (
             <div className="mt-7 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
               {sortedLectures.map((lecture) => (
-                <LectureCard key={lecture.slug} lecture={lecture} userId={user?.id} />
+                <LectureCard
+                  key={lecture.slug}
+                  lecture={lecture}
+                  userId={user?.id}
+                />
               ))}
             </div>
           ) : (
-            <div className="mt-8 rounded-3xl border border-slate-200 bg-white p-10 text-center text-slate-500 shadow-sm">
-              {hasActiveFilters
-                ? "No lectures matched that search yet. Try a broader keyword, another subject, or clear filters."
-                : `No lectures available for ${selectedSubject}.`}
+            <div className="mt-8 rounded-2xl border border-dashed border-slate-300 bg-white p-7 text-center">
+              <p className="text-base font-semibold text-slate-700">No lectures found.</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Try another keyword, subject, or sorting option.
+              </p>
+              {hasActiveFilters && (
+                <div className="mt-4">
+                  <Link
+                    href="/student"
+                    className="inline-flex rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                  >
+                    Reset filters
+                  </Link>
+                </div>
+              )}
             </div>
           )}
         </section>
