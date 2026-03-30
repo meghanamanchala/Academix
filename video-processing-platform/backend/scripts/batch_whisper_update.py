@@ -179,7 +179,7 @@ def build_summary(transcript: list[dict[str, str]], title: str) -> str:
     lead = texts[0]
     middle = texts[len(texts) // 2] if len(texts) > 1 else ""
     tail = texts[-1] if len(texts) > 1 else ""
-    parts = [p for p in [lead, middle, tail] if p and p != lead or p == lead]
+    # removed unused variable 'parts'
     seen: list[str] = []
     for p in [lead, middle, tail]:
         if p and p not in seen:
@@ -225,12 +225,12 @@ def update_lecture(lecture: dict) -> bool:
 
     video_path = find_video_file(slug)
     if not video_path:
-        print(f"  SKIP — no video file found in uploads/ for job suffix")
+        print("  SKIP — no video file found in uploads/ for job suffix")
         return False
 
     transcript = transcribe_video(video_path)
     if not transcript:
-        print(f"  SKIP — Whisper produced empty transcript")
+        print("  SKIP — Whisper produced empty transcript")
         return False
 
     print(f"  Got {len(transcript)} segments")
