@@ -18,6 +18,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Academix Admin Dashboard",
   description: "Fault-tolerant learning platform admin dashboard",
+  icons: {
+    icon: "/academix-favicon.svg",
+    shortcut: "/academix-favicon.svg",
+    apple: "/academix-favicon.svg",
+  },
 };
 
 export default function RootLayout({

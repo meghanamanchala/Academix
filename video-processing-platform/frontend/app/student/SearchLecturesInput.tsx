@@ -51,7 +51,7 @@ export default function SearchLecturesInput({ initialQuery = "" }: SearchLecture
         name="q"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        placeholder="Search lectures..."
+        placeholder="Search by title, subject, topic, or transcript..."
         className="w-full bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
       />
       {value ? (
