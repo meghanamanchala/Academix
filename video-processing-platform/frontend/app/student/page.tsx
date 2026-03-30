@@ -11,23 +11,31 @@ type StudentLibraryPageProps = {
   searchParams: Promise<{ q?: string; subject?: string; sort?: string }>;
 };
 
-const SORT_OPTIONS = ["recent", "a-z", "duration"] as const;
+const SORT_OPTIONS = ["relevance", "recent", "a-z", "duration"] as const;
 type SortOption = (typeof SORT_OPTIONS)[number];
 
-function normalizeSort(sort: string | undefined): SortOption {
+function normalizeSort(sort: string | undefined, hasQuery: boolean): SortOption {
   if (!sort) {
-    return "recent";
+    return hasQuery ? "relevance" : "recent";
   }
 
   const normalized = sort.toLowerCase();
-  return SORT_OPTIONS.includes(normalized as SortOption) ? (normalized as SortOption) : "recent";
+  if (!SORT_OPTIONS.includes(normalized as SortOption)) {
+    return hasQuery ? "relevance" : "recent";
+  }
+
+  if (normalized === "relevance" && !hasQuery) {
+    return "recent";
+  }
+
+  return normalized as SortOption;
 }
 
 export default async function StudentLibraryPage({ searchParams }: StudentLibraryPageProps) {
   const { q, subject, sort } = await searchParams;
   const query = (q ?? "").trim();
   const selectedSubject = normalizeSubject(subject);
-  const selectedSort = normalizeSort(sort);
+  const selectedSort = normalizeSort(sort, Boolean(query));
   let lectures = [] as Awaited<ReturnType<typeof fetchLectures>>;
   let loadError: string | null = null;
 
@@ -45,7 +53,7 @@ export default async function StudentLibraryPage({ searchParams }: StudentLibrar
     if (query) {
       params.set("q", query);
     }
-    if (selectedSort !== "recent") {
+    if (selectedSort !== "recent" && !(selectedSort === "relevance" && query)) {
       params.set("sort", selectedSort);
     }
     if (targetSubject !== "All Subjects") {
@@ -64,7 +72,7 @@ export default async function StudentLibraryPage({ searchParams }: StudentLibrar
     if (selectedSubject !== "All Subjects") {
       params.set("subject", selectedSubject);
     }
-    if (targetSort !== "recent") {
+    if (targetSort !== "recent" && !(targetSort === "relevance" && query)) {
       params.set("sort", targetSort);
     }
 
@@ -72,24 +80,27 @@ export default async function StudentLibraryPage({ searchParams }: StudentLibrar
     return next ? `/student?${next}` : "/student";
   };
 
-  const sortedLectures = [...lectures].sort((left, right) => {
-    if (selectedSort === "a-z") {
-      return left.title.localeCompare(right.title);
-    }
+  const sortedLectures =
+    selectedSort === "relevance" && query
+      ? lectures
+      : [...lectures].sort((left, right) => {
+          if (selectedSort === "a-z") {
+            return left.title.localeCompare(right.title);
+          }
 
-    if (selectedSort === "duration") {
-      return (right.durationSeconds ?? 0) - (left.durationSeconds ?? 0);
-    }
+          if (selectedSort === "duration") {
+            return (right.durationSeconds ?? 0) - (left.durationSeconds ?? 0);
+          }
 
-    const leftTime = new Date(left.updatedAt ?? left.publishedDate).getTime();
-    const rightTime = new Date(right.updatedAt ?? right.publishedDate).getTime();
+          const leftTime = new Date(left.updatedAt ?? left.publishedDate).getTime();
+          const rightTime = new Date(right.updatedAt ?? right.publishedDate).getTime();
 
-    if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime)) {
-      return rightTime - leftTime;
-    }
+          if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime)) {
+            return rightTime - leftTime;
+          }
 
-    return right.title.localeCompare(left.title);
-  });
+          return right.title.localeCompare(left.title);
+        });
 
   const hasActiveFilters = Boolean(query) || selectedSubject !== "All Subjects" || selectedSort !== "recent";
 
@@ -113,6 +124,9 @@ export default async function StudentLibraryPage({ searchParams }: StudentLibrar
 
               <div className="w-full max-w-sm">
                 <SearchLecturesInput initialQuery={q ?? ""} />
+                <p className="mt-2 text-xs text-slate-500">
+                  Search across lecture titles, subjects, summaries, key concepts, and transcript text.
+                </p>
               </div>
             </div>
 
@@ -141,9 +155,14 @@ export default async function StudentLibraryPage({ searchParams }: StudentLibrar
 
             <div className="mt-4 flex flex-wrap items-center gap-2.5">
               {SORT_OPTIONS.map((sortOption) => {
+                if (sortOption === "relevance" && !query) {
+                  return null;
+                }
                 const isActive = selectedSort === sortOption;
                 const label =
-                  sortOption === "recent"
+                  sortOption === "relevance"
+                    ? "Best Match"
+                    : sortOption === "recent"
                     ? "Latest"
                     : sortOption === "a-z"
                       ? "A-Z"
@@ -167,6 +186,12 @@ export default async function StudentLibraryPage({ searchParams }: StudentLibrar
               <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                 Results: {sortedLectures.length}
               </span>
+
+              {query ? (
+                <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                  Search: &quot;{query}&quot;
+                </span>
+              ) : null}
 
               {hasActiveFilters ? (
                 <Link
@@ -194,7 +219,7 @@ export default async function StudentLibraryPage({ searchParams }: StudentLibrar
           ) : (
             <div className="mt-8 rounded-3xl border border-slate-200 bg-white p-10 text-center text-slate-500 shadow-sm">
               {hasActiveFilters
-                ? "No lectures match your current filters. Try clearing filters or changing sort/search."
+                ? "No lectures matched that search yet. Try a broader keyword, another subject, or clear filters."
                 : `No lectures available for ${selectedSubject}.`}
             </div>
           )}

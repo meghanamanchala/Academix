@@ -858,6 +858,93 @@ def lecture_from_doc(doc: dict[str, Any]) -> Lecture:
     )
 
 
+def build_lecture_search_terms(doc: dict[str, Any]) -> dict[str, str]:
+    transcript_text = " ".join(
+        str(item.get("text", "")).strip()
+        for item in doc.get("transcript", [])
+        if isinstance(item, dict)
+    )
+    concept_text = " ".join(
+        str(item.get("title", "")).strip()
+        for item in doc.get("keyConcepts", [])
+        if isinstance(item, dict)
+    )
+    return {
+        "title": str(doc.get("title") or ""),
+        "subject": str(doc.get("subject") or ""),
+        "description": str(doc.get("description") or ""),
+        "summary": str(doc.get("aiSummary") or ""),
+        "concepts": concept_text,
+        "transcript": transcript_text,
+    }
+
+
+def lecture_search_score(doc: dict[str, Any], raw_query: str) -> int:
+    query = raw_query.strip().lower()
+    if not query:
+        return 0
+
+    tokens = [token for token in re.split(r"\s+", query) if token]
+    if not tokens:
+        return 0
+
+    fields = {name: value.lower() for name, value in build_lecture_search_terms(doc).items()}
+    score = 0
+
+    title = fields["title"]
+    subject = fields["subject"]
+    description = fields["description"]
+    summary = fields["summary"]
+    concepts = fields["concepts"]
+    transcript = fields["transcript"]
+
+    if query == title:
+        score += 200
+    elif title.startswith(query):
+        score += 140
+    elif query in title:
+        score += 110
+
+    if query == subject:
+        score += 130
+    elif query in subject:
+        score += 90
+
+    if query in description:
+        score += 70
+    if query in summary:
+        score += 60
+    if query in concepts:
+        score += 55
+    if query in transcript:
+        score += 40
+
+    for token in tokens:
+        if token in title:
+            score += 28
+        if token in subject:
+            score += 22
+        if token in description:
+            score += 12
+        if token in summary:
+            score += 10
+        if token in concepts:
+            score += 10
+        if token in transcript:
+            score += 6
+
+    if all(token in title for token in tokens):
+        score += 50
+    if all(token in f"{title} {subject} {description} {summary} {concepts}" for token in tokens):
+        score += 35
+
+    return score
+
+
+def lecture_matches_search(doc: dict[str, Any], raw_query: str) -> bool:
+    return lecture_search_score(doc, raw_query) > 0
+
+
 def to_iso_string(value: Any) -> str:
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -1265,7 +1352,7 @@ def build_key_concepts(title: str, transcript: list[dict[str, str]]) -> list[dic
         if term_counts:
             ranked_terms = sorted(term_counts.items(), key=lambda item: (-item[1], item[0]))[:4]
             frequency_concepts = [
-                {"title": term.replace("-", " ").title(), "timestamp": first_timestamp.get(term, "00:00")}
+                {"title": term.replace("-", " ").title(), "timestamp": first_term_timestamp.get(term, "00:00")}
                 for term, _ in ranked_terms
             ]
             merged = phrase_concepts + frequency_concepts
@@ -2309,12 +2396,6 @@ async def list_lectures(
     if not includeDeleted:
         filters["isDeleted"] = {"$ne": True}
     search_query = (q or "").strip()
-    if search_query:
-        escaped = re.escape(search_query)
-        filters["$or"] = [
-            {"title": {"$regex": escaped, "$options": "i"}},
-            {"description": {"$regex": escaped, "$options": "i"}},
-        ]
 
     subject_query = (subject or "").strip()
     if subject_query and subject_query.lower() != "all subjects":
@@ -2322,10 +2403,27 @@ async def list_lectures(
         filters["subject"] = {"$regex": f"^{escaped_subject}$", "$options": "i"}
 
     cursor = db.lectures.find(filters).sort("created_at", -1)
+    ranked_results: list[tuple[int, Lecture]] = []
     results: list[Lecture] = []
     async for doc in cursor:
-        results.append(lecture_from_doc(doc))
-    return results
+        if search_query:
+            score = lecture_search_score(doc, search_query)
+            if score <= 0:
+                continue
+            ranked_results.append((score, lecture_from_doc(doc)))
+        else:
+            results.append(lecture_from_doc(doc))
+
+    if not search_query:
+        return results
+
+    ranked_results.sort(
+        key=lambda item: (
+            -item[0],
+            item[1].title.lower(),
+        )
+    )
+    return [lecture for _, lecture in ranked_results]
 
 
 @app.get("/api/lectures/{slug}/key-concepts")
