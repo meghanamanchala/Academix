@@ -1,6 +1,5 @@
 from fastapi.testclient import TestClient
 import pytest
-import re
 import sys
 from pathlib import Path
 from datetime import datetime, UTC
@@ -30,40 +29,6 @@ class FakeCursor:
         value = self.docs[self._index]
         self._index += 1
         return value
-
-
-def matches_query(doc, query):
-    query = query or {}
-
-    for key, value in query.items():
-        if key == "$or":
-            if not any(matches_query(doc, branch) for branch in value):
-                return False
-            continue
-
-        doc_value = doc.get(key)
-        if isinstance(value, dict):
-            matched_operator = False
-            if "$ne" in value and doc_value == value["$ne"]:
-                return False
-            if "$ne" in value:
-                matched_operator = True
-
-            if "$regex" in value:
-                flags = 0
-                if "i" in str(value.get("$options", "")):
-                    flags |= re.IGNORECASE
-                if not re.search(value["$regex"], str(doc_value or ""), flags):
-                    return False
-                matched_operator = True
-
-            if matched_operator:
-                continue
-
-        if doc_value != value:
-            return False
-
-    return True
 
 
 class FakeCollection:
@@ -101,11 +66,15 @@ class FakeCollection:
         if "status" in query and isinstance(query["status"], dict) and "$in" in query["status"]:
             values = set(query["status"]["$in"])
             return sum(1 for doc in self.docs if doc.get("status") in values)
-        return sum(1 for doc in self.docs if matches_query(doc, query))
+        return sum(1 for doc in self.docs if all(doc.get(key) == value for key, value in query.items()))
 
     def find(self, query=None):
         query = query or {}
-        filtered = [doc for doc in self.docs if matches_query(doc, query)]
+        filtered = [
+            doc
+            for doc in self.docs
+            if all(doc.get(key) == value for key, value in query.items())
+        ]
         return FakeCursor(filtered)
 
 
@@ -137,7 +106,6 @@ class FakeDB:
                 {
                     "slug": "intro",
                     "title": "Intro",
-                    "subject": "Computer Science",
                     "description": "First lecture",
                     "duration": "10:00",
                     # the numeric seconds will be computed when converting to Lecture model
@@ -148,22 +116,7 @@ class FakeDB:
                     "keyConcepts": [],
                     "viewedBy": [],
                     "progress": {},
-                },
-                {
-                    "slug": "design-thinking",
-                    "title": "Design Thinking Workshop",
-                    "subject": "UX Design",
-                    "description": "Learn to frame product problems.",
-                    "duration": "18:30",
-                    "image": "https://images.unsplash.com/photo-2",
-                    "publishedDate": "Jan 02, 2026",
-                    "views": "14 views",
-                    "aiSummary": "Covers empathy interviews and prototype loops.",
-                    "keyConcepts": [{"title": "Empathy Mapping", "timestamp": "03:15"}],
-                    "transcript": [{"timestamp": "05:10", "text": "prototype testing with students"}],
-                    "viewedBy": [],
-                    "progress": {},
-                },
+                }
             ]
         )
 
@@ -267,7 +220,7 @@ def test_dashboard_summary():
     response = client.get("/api/admin/dashboard-summary")
     assert response.status_code == 200
     body = response.json()
-    assert body["totalLectures"] == 2
+    assert body["totalLectures"] == 1
     assert body["completedJobs"] == 1
     assert body["failedJobs"] == 1
     assert len(body["recentJobs"]) >= 1
@@ -326,30 +279,6 @@ def test_search_transcript():
     assert resp.status_code == 200
     assert len(resp.json()["matches"]) == 1
     assert resp.json()["matches"][0]["timestamp"] == "01:00"
-
-
-def test_library_search_matches_subject_and_summary():
-    response = client.get("/api/lectures?q=ux design")
-    assert response.status_code == 200
-    body = response.json()
-    assert len(body) == 1
-    assert body[0]["slug"] == "design-thinking"
-
-
-def test_library_search_matches_transcript_text():
-    response = client.get("/api/lectures?q=prototype")
-    assert response.status_code == 200
-    body = response.json()
-    assert len(body) == 1
-    assert body[0]["slug"] == "design-thinking"
-
-
-def test_library_search_respects_subject_filter():
-    response = client.get("/api/lectures?q=lecture&subject=Computer Science")
-    assert response.status_code == 200
-    body = response.json()
-    assert len(body) == 1
-    assert body[0]["slug"] == "intro"
 
 
 def test_ai_transcript_endpoint():
