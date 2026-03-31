@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+
+# Video Processing Platform – Frontend
+
+This is the frontend for the Video Processing Platform, built with [Next.js](https://nextjs.org).
+
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+- Node.js (see `package.json` for version)
+- npm, yarn, pnpm, or bun
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+### Local Development
+1. Install dependencies:
+	```sh
+	npm install
+	# or yarn install, pnpm install, bun install
+	```
+2. Start the development server:
+	```sh
+	npm run dev
+	# or yarn dev, pnpm dev, bun dev
+	```
+3. Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### Editing
+Edit pages in `app/` (e.g., `app/page.tsx`). The app auto-updates as you edit files.
+
+### Environment Variables
+Create a `.env.local` file for environment-specific variables (see `.env.example` if available).
+
+### Docker
+To run the frontend in Docker:
+```sh
+docker build -t video-frontend .
+docker run -p 3000:3000 video-frontend
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
+For backend/API setup, see `../backend/README.md`.
+For deployment and architecture, see `../DEPLOYMENT.md`.
 
 ## Learn More
 
-To learn more about Next.js, take a look at the following resources:
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Learn Next.js](https://nextjs.org/learn)
+- [Next.js GitHub](https://github.com/vercel/next.js)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+For deployment, Kubernetes, and Helm instructions, see the main `DEPLOYMENT.md` in the project root.
