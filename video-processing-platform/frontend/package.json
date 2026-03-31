@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit",
+    "test": "jest --passWithNoTests",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.27.0",

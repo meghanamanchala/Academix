@@ -41,6 +41,12 @@ jobs:
       - name: Run lint
         run: npm run lint
 
+      - name: Type check
+        run: npm run type-check
+
+      - name: Run unit tests
+        run: npm run test
+
       - name: Build
         env:
           NODE_ENV: production
